@@ -1,0 +1,67 @@
+sequenceDiagram
+    actor Client
+    participant WebApp
+    participant User Service
+    participant Notification Service
+    participant LexisNexis API
+    participant Contract Service
+    participant Payroll Service
+    participant RabbitMQ
+
+    %% --- Step 1: Open Business Entity Form ---
+    Client->>WebApp: Open business entity registration form [Multi Steps]
+    WebApp-->>Client: Show registration form
+
+    %% --- Step 2: Submit Business Entity Details ---
+    Client->>WebApp: Fill & submit business legal entity details
+    WebApp->>User Service: Call Create Legal Entity API [REST] + activation_status: pending
+    User Service-->>WebApp: Legal Entity created
+
+    %% --- Step 3: Show KYB Form ---
+    WebApp-->>Client: Notify legal entity creation + Redirect to KYB information form
+    Client->>WebApp: Fill & Submit KYB information
+    WebApp->>User Service: Call Create KYB Profile for Business API [REST] + Submit KYB details to 3rd Party [Veriff]
+    User Service-->>WebApp: KYB Profile created
+    WebApp-->>Client: Redirect to dashboard + Show verification in progress
+
+    %% --- Step 4: Send Business Registration Email ---
+    User Service->>RabbitMQ: Enqueue Job1: Send business registration email to client
+    RabbitMQ->>Notification Service: Dequeue Job1: Process and call Amazon SES API [REST]
+    Notification Service-->>Client: Send business registration email
+
+    %% --- Step 5: Contract creation ---
+    User Service->>Contract Service: Call create_contract API [GRPC] + contract_type: EOR and between Client & KOMP
+    Contract Service-->>User Service: Contract created
+
+    %% --- Step 6: Perform Due Diligence ---
+    User Service->>LexisNexis API: Call LexisNexis Due Diligence API [REST]
+    LexisNexis API-->>User Service: Return risk profile info with score
+
+    %% --- Step 7: Create legal entity risk profile ---
+    User Service->>User Service: Create legal entity risk profile
+
+    %% --- Step 8: Account Activation Based on Risk Score ---
+    loop wait KYB verification from Kafka topic: kyc_verification
+        alt Risk score acceptable
+            User Service->>User Service: Activate legal entity        
+
+            User Service->>Payroll Service: Call create_payroll API [GRPC]
+            Payroll Service-->>User Service: Client Payroll created
+
+            User Service->>Payment Service: Call assign_funding_account API [GRPC]
+            Payment Service-->>User Service: Funding account assigned
+
+            User Service->>RabbitMQ: Enqueue Job2: Send legal entity activation email to client
+            RabbitMQ->>Notification Service: Dequeue Job2: Process and send email to Amazon SES API [REST]
+            Notification Service-->>Client: Send legal entity activation email
+            
+            Client->>WebApp: Submit login credentials
+            WebApp->>User Service: Call Login User API [REST]
+            User Service-->>WebApp: Login successful + Redirect to dashboard + Show status - Contract signing is pending
+        else High risk score
+            User Service->>User Service: Flag for manual review
+            Client->>WebApp: Submit login credentials
+            WebApp->>User Service: Call Login User API [REST]
+            User Service-->>WebApp: Login successful + Redirect to dashboard + Show status - Pending Review
+        end
+    end

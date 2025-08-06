@@ -1,0 +1,89 @@
+sequenceDiagram
+    actor Client
+    actor Employee
+    participant WebApp
+    participant User Service
+    participant Contract Service
+    participant Payroll Service
+    participant Notification Service
+    participant AI Service
+    participant RabbitMQ
+    participant Payment Service
+
+    %% Step 1: Client submits employee details
+    Note over Client,WebApp: Employee Onboarding Flow Part 1
+    Client->>WebApp: Fill employee details and click next
+    WebApp->>User Service: Call Create Legal Entity API [REST] + activation_status: pending
+    User Service-->>WebApp: Legal Entity created
+
+    %% Step 2: On next step show employee salary structure form
+    WebApp-->>Client: Show employee salary structure form
+    Client->>WebApp: Fill employee salary structure details and click next
+
+    %% Step 3: On next step show employee benefits form
+    WebApp-->>Client: Show employee benefits form
+    Client->>WebApp: Select employee benefits information and click next
+
+    %% Step 4: On next step Create contract or offer letter
+    WebApp->>Contract Service: Call Create Contract API [REST] + with {salary structure,benefits}
+    Contract Service->>AI Service: Generate contract document + upload to S3
+    AI Service-->>Contract Service: Contract document generated + CDN URL
+    Contract Service-->>WebApp: Show contract document for client signing
+
+    WebApp->>Contract Service: Call sign_contract_by_legal_entity API [GRPC]
+    Contract Service-->>WebApp: Contract signed by client
+    Contract Service->>RabbitMQ: Enqueue Job1: Send onboarding instructions email to employee
+    RabbitMQ->>Notification Service: Dequeue Job1: Process and send email to Amazon SES API [REST]
+    Notification Service-->>Employee: Send onboarding instructions email
+
+    %% Step5: Employee upload KYC details
+    Note over Employee,WebApp: Employee Onboarding Flow Part 2
+    Employee->>WebApp: Redirect to webApp via onboarding email link
+    Employee->>WebApp: Upload KYC details
+
+    WebApp->>User Service: Call Create KYC Profile for Employees API [REST] + Submit KYC details to 3rd Party [Veriff]
+    User Service-->>WebApp: KYC profile created
+
+    %% Step6: Beneficiary creation for payout
+    WebApp->> Employee: Show form to capture bank account details
+    Employee->>WebApp: Fill bank account details and click next
+
+    WebApp->>Payment Service: Call Create beneficiary API [REST]
+    Payment Service-->>WebApp: Notify Beneficiary created + Redirect to show offer letter page
+
+    %% Step 7: Employee review and sign offer letter
+    WebApp->> Employee: Show offer letter page
+    Employee->>WebApp: Review offer letter + Sign It + click next
+    WebApp->>Contract Service: Call sign_contract_by_legal_entity API [GRPC]
+    Contract Service-->>WebApp: Contract signed successfully
+    
+    Contract Service->>RabbitMQ: Enqueue Job2: Send contract signed email to employee
+    RabbitMQ->>Notification Service: Dequeue Job2: Process and send email to Amazon SES API [REST]
+    Notification Service-->>Employee: Send contract signed email
+    WebApp-->>Employee: Redirect to dashboard + Show KYC verification pending
+
+    %% Step 8: Employee contact is not active till KYC completed
+    loop wait for KYC completion event from Kafka topic: kyc_verification
+        alt KYC Completed
+            User Service->>User Service: Call activate_legal_entity API [GRPC]
+            User Service-->>User Service: Legal entity activated
+
+            User Service->>Contract Service: Call activate_contract API [GRPC]
+            Contract Service-->>User Service: Contract activated
+
+            User Service->>Payroll Service: Call tag_contract_to_payroll API [GRPC]
+            Payroll Service-->>User Service: Contract tagged
+
+            User Service->>RabbitMQ: Enqueue Job3: Send contract activated email to employee
+            RabbitMQ->>Notification Service: Dequeue Job3: Process and send email to Amazon SES API [REST]
+            Notification Service-->>Employee: Send contract activated email
+            
+            Employee->>WebApp: Submit login credentials
+            WebApp->>User Service: Call Login User API [REST]
+            User Service-->>WebApp: Login successful + Redirect to dashboard + Show contract activated
+        else
+            Employee->>WebApp: Submit login credentials
+            WebApp->>User Service: Call Login User API [REST]
+            User Service-->>WebApp: Login successful + Redirect to dashboard + Show KYC verification pending
+        end
+    end

@@ -1,0 +1,35 @@
+sequenceDiagram
+    actor Client
+    actor Operation Team
+    participant WebApp
+    participant Notification Service
+    participant Contract Service
+    participant Payroll Service
+    participant Payment Service
+    participant Invoice Service
+    participant Forex Service
+    participant RabbitMQ
+
+    %% --- Step 1: Operation Team Trigger Pay Run to generate client invoice ---
+    Operation Team->>WebApp: Open client Payroll +  Click on Payrun button
+    WebApp->>Payroll Service: Call Trigger Payrun API [REST]
+
+    %% --- Step 2: Get FX Rates for all payroll currencies ---
+    Payroll Service->>Forex Service: Call fetch_forex_by_currency_pairs API [GRPC] with {client billing currency, payroll currency}
+    Forex Service-->>Payroll Service: FX Rates for all payroll currencies
+
+    %% --- Step 3: Lock FX rates to payroll ---
+    Payroll Service->>Payroll Service: Lock FX rates to payroll
+
+    %% --- Step 4: Invoice Generation & Auto raise to client for payment ---
+    Payroll Service->>Invoice Service: Call generate_invoice API [GRPC]
+    Invoice Service-->>Payroll Service: Invoice generated + Auto raised to client for payment
+
+    %% --- Step 5: Notify Payroll invoice is generated + Auto raised to client for payment ---
+    Payroll Service->> WebApp: Payroll invoice raised to Client
+    WebApp-->>Operation Team: Notify Payroll invoice generated + Redirect to client invoices
+
+    %% --- Step 6: Send Invoice Raised email to Client ---
+    Invoice Service->>RabbitMQ: Enqueue Job1: Send Invoice Raised email to Client
+    RabbitMQ->>Notification Service: Dequeue Job1: Process and send email to Amazon SES API [REST]
+    Notification Service-->>Client: Send Invoice raised email

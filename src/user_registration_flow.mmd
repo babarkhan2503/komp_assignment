@@ -1,0 +1,57 @@
+sequenceDiagram
+    actor Subject
+    participant WebApp
+    participant User Service
+    participant Notification Service
+    participant RabbitMQ
+    participant AI Service
+
+    %% --- User Registration Flow ---
+    Note over Subject,WebApp: User Registration Flow
+
+    Subject->>WebApp: Click on sign up button
+    WebApp-->>Subject: Show registration form
+
+    Subject->>WebApp: Fill & Submit registration details
+    WebApp->>User Service: Call Register User API [REST]
+
+    User Service->>User Service: Validate data
+    User Service->>User Service: Create user profile & generate JWT token
+    User Service->>RabbitMQ: Enqueue Job1: Send confirmation email
+
+    RabbitMQ->>Notification Service: Dequeue Job1: Process and Send confirmation email
+    
+    Notification Service->>AI Service: Call generate_email_template API [GRPC]
+    AI Service-->>Notification Service: Email template generated
+    Notification Service->>Notification Service: use email template + send email to Amazon SES
+    Notification Service-->> Subject: Send account confirmation email
+    
+    User Service-->>WebApp: Registration successful
+    WebApp-->>Subject: Redirect subject to dashboard + Show pending details to fill
+
+    %% --- User Login Flow ---
+    Note over Subject,WebApp: User login Flow
+
+    Subject->>WebApp: Click on Sign In button
+    WebApp-->>Subject: Show login form
+
+    Subject->>WebApp: Fill & Submit login credentials
+    WebApp->>User Service: Call Login User API [REST]
+
+    User Service->>User Service: Decode JWT token & validate credentials
+
+    alt Valid Credentials
+        User Service-->>WebApp: Login success + user data
+
+        alt Subject is Client
+            WebApp-->>Subject: Show client dashboard + Notify login success
+        else Subject is Employee
+            WebApp-->>Subject: Show employee dashboard + Notify login success
+        else Subject is Operation Team
+            WebApp-->>Subject: Show operation team dashboard + Notify login success
+        end
+
+    else Invalid Credentials
+        User Service-->>WebApp: Login error
+        WebApp-->>Subject: Show login error
+    end

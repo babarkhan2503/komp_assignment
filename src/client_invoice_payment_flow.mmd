@@ -1,0 +1,58 @@
+sequenceDiagram
+    actor Client
+    actor Employee
+    participant WebPortal
+    participant NotificationService
+    participant PaymentService
+    participant InvoiceService
+    participant PayrollService
+    participant RabbitMQ
+    participant WebhookService
+    participant Kafka
+    participant ExternalPaymentGateway
+
+
+    %% --- Step 1: Open payroll invoice ---
+    Client->>WebPortal: After making offline payment client open payroll invoice
+    WebPortal-->>Client: Invoice details
+
+    %% --- Step 2: Client update UTR on invoice as a payment proof ---
+    Client->>WebPortal: Update system generated UTR on invoice
+    WebPortal->>InvoiceService: Call Update Invoice API [REST]
+    InvoiceService-->>WebPortal: Invoice updated with UTR
+    
+    %% --- Step 3: Payment received in client funding account ---
+    ExternalPaymentGateway->>WebhookService: External gateway trigger payment confirmation webhook
+    WebhookService->>Kafka: Webhook service send the payment confirmation message to Kafka topic
+    WebhookService-->>ExternalPaymentGateway: Payment confirmation received
+
+    %% --- Step 4: Wait for client funding confirmation event from Kafka ---   
+    loop read funding confirmation event from Kafka topic-> client_funding_confirmation
+        PaymentService->>PaymentService: Create client funding transaction
+
+        PaymentService->>InvoiceService: Call update_invoice API [GRPC] with status: paid and transaction_id
+        InvoiceService-->>PaymentService: Invoice updated
+
+        PaymentService->>PaymentService: Create payout request for each employee by using payroll invoice
+        PaymentService->>ExternalPaymentGateway: Send payout requests to external payment gateway
+        ExternalPaymentGateway-->>PaymentService: Payout requests submitted
+        PaymentService->>PaymentService: Update external payment reference number in each payout request
+
+        PaymentService->>RabbitMQ: Enqueue Job1: Send funding received confirmation email to client
+        RabbitMQ->>NotificationService: Dequeue Job1: Process and Send email to Amazon SES API [REST]
+        NotificationService-->>Client: Send funding received confirmation email to client
+    end
+
+    %% --- Step 5: Wait for payout confirmation from payment Gateway ---   
+    loop read payout confirmation event from Kafka topic: payout_confirmation
+    PaymentService->>PaymentService: Update payout request status as paid by external reference number
+
+    PaymentService->>RabbitMQ: Enqueue Job2: Payslip generation request
+    RabbitMQ->>PayrollService: Dequeue Job2: Process and create payslip for employee
+
+    PayrollService->>RabbitMQ: Enqueue Job3: Sending payslip to employee via email
+    RabbitMQ->>NotificationService: Dequeue Job3: Process and Send email to Amazon SES API [REST]
+    NotificationService-->>Employee: Send payslip email to employee
+    end
+    
+    
